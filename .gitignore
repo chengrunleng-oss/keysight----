@@ -1,0 +1,13 @@
+# MATLAB and editor-generated files
+*.asv
+*.autosave
+*.m~
+*.log
+
+# MATLAB compiled/package build output
+Stability Analyzer 2.0/Stability Analyzer 2.0/StabilityAnalyzerGUI-EXE/
+
+# Python cache and local run data
+__pycache__/
+*.py[cod]
+python_realtime_stability/data/
