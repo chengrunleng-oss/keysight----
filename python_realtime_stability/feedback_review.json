@@ -1,0 +1,54 @@
+{
+  "document_type": "python_test_feedback_reaudit",
+  "scope": "python_realtime_stability",
+  "updated_at": "2026-08-13",
+  "reporting_policy": "仅保留本轮新增或仍未通过、受阻、尚待验证的结果。",
+  "change_policy": {
+    "python_source_modified_by_this_review": true,
+    "test_source_modified_by_this_review": true,
+    "git_commit_created_by_this_review": true,
+    "original_matlab_source_modified": false
+  },
+  "latest_feedback_integrated": "将仪器连接检查与参数写入及检查拆成两个独立功能和两个按钮。硬件模式下必须先通过测试连接，再执行并通过写入并检查参数，之后才允许开始采集。",
+  "resolved_findings": [
+    {
+      "id": "GUI-WORKFLOW-002",
+      "severity": "high",
+      "status": "resolved_and_tested",
+      "details": "新增独立的测试连接和写入并检查参数按钮。连接成功只解锁参数按钮；参数检查成功且当前连接/参数指纹均有效时才解锁开始采集。连接参数变化会清空两级验证，采集参数变化只清空参数验证。"
+    },
+    {
+      "id": "INST-CONFIG-002",
+      "severity": "high",
+      "status": "resolved_and_tested_at_code_level",
+      "details": "新增 ParameterCheck 结构化结果。配置操作严格要求 *OPC? 数值等于 1，完整排空 SYST:ERR?，并读回测量功能/通道、连续模式、Gate source/time、输入耦合/阻抗/边沿、自动电平状态、量程、触发电平、触发源、采样计数、触发计数、数据格式、字节序和 SYST:TIM。结果与失败原因写入 metadata.json。"
+    },
+    {
+      "id": "TEST-WORKFLOW-002",
+      "severity": "medium",
+      "status": "resolved_and_tested",
+      "details": "新增两阶段门禁、异步过期结果、连接/参数失效、参数失败、OPC 异常和单项读回不一致的自动测试；GUI 隐藏 Tk 测试直接读取按钮 state。"
+    }
+  ],
+  "verification": {
+    "unittest_command": "python -m unittest discover -s tests -v",
+    "unittest_result": "31 tests passed",
+    "compileall_result": "passed",
+    "gui_import_result": "passed with tkinter, numpy, and matplotlib imports",
+    "hardware_connection_test": "blocked: 192.168.1.123:5025 timed out",
+    "hardware_parameter_test": "not run because the live endpoint was unavailable"
+  },
+  "remaining_risks": [
+    "The live 53230A endpoint was unavailable during this review, so actual firmware response spellings for all readback queries must be confirmed on first hardware run.",
+    "INP<channel>:LEV:AUTO ONCE, resulting range/level, and warning behavior still require low, nominal, and high amplitude validation against the original MATLAB procedure.",
+    "Some firmware revisions may return numeric SAMP:COUN? instead of MAX; the implementation accepts MAX or a numeric value at least 1000000 and records the exact response."
+  ],
+  "release_recommendation": {
+    "decision": "two_stage_workflow_accepted_for_code_and_simulation; hardware_signoff_blocked",
+    "blocking_items": [
+      "Restore access to 192.168.1.123:5025 and rerun the read-only *IDN? test.",
+      "Run write/readback validation on the real 53230A with low, nominal, and high input amplitudes.",
+      "Confirm the firmware's exact query response formats and compare the recorded parameter_checks with the instrument front panel."
+    ]
+  }
+}
