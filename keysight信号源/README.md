@@ -2,6 +2,39 @@
 
 这是一个纯 Python、无第三方依赖的 N5171B 控制器。计算机通过网线连接信号源，使用 `TCP 5025` 端口发送 SCPI 指令。
 
+## 获取仪器 IP 地址
+
+在 N5171B 前面板依次进入：
+
+```text
+Utility > I/O Config > LAN Setup > Manual Config Settings > IP Address
+```
+
+如果 `Config Type` 是 `Auto (DHCP/Auto-IP)`，先连接网线并等待仪器获得地址，再进入上述页面查看。如果没有 DHCP，也可以选择 `Manual`，手动给仪器和电脑设置同一网段且不重复的地址，例如：
+
+```text
+仪器: 192.168.10.2
+电脑: 192.168.10.1
+子网掩码: 255.255.255.0
+```
+
+本项目通过 TCP 5025 直接发送 SCPI，因此还要确认仪器的 Socket 服务已启用：
+
+```text
+Utility > I/O Config > LAN Services Setup > SCPI Services
+> Sockets SCPI: On > Proceed With Reconfiguration
+```
+
+完成后可在电脑上执行 `ping 192.168.10.2` 检查网络是否连通，再用 Python 查询仪器型号：
+
+```python
+from n5171b import N5171B
+
+source = N5171B("192.168.10.2")
+print(source.connect())  # 应返回包含 Keysight,N5171B 的识别信息
+source.close()
+```
+
 ## 模块结构
 
 ```text
@@ -63,7 +96,52 @@ source.sweep.stop()
 from n5171b import N5171B
 
 with N5171B("192.168.1.100") as source:
-    source.output.set_cw(frequency_mhz=1000, power_dbm=-10)
+    source.output.set_single_point(
+        frequency_mhz=1000,
+        power_dbm=-10,
+        rf_on=True,
+    )
+```
+
+也可以分别设置频率和功率：
+
+```python
+source.output.set_frequency(1000)  # MHz
+source.output.set_power(-10)       # dBm
+source.output.set_rf(True)
+```
+
+`set_cw()` 仍然保留，功能与 `set_single_point()` 相同。
+
+## 读取当前输出状态
+
+N5171B 是单路 RF 输出信号源，当前通道状态可这样读取：
+
+```python
+with N5171B("192.168.1.100") as source:
+    state = source.output.get_state()
+    print(state)
+```
+
+返回值示例：
+
+```python
+{
+    "frequency_mhz": 1000.0,
+    "power_dbm": -10.0,
+    "rf_enabled": True,
+    "modulation_enabled": False,
+    "frequency_mode": "CW",
+    "power_mode": "FIX",
+}
+```
+
+也可以单独读取：
+
+```python
+frequency_mhz = source.output.get_frequency_mhz()
+power_dbm = source.output.get_power_dbm()
+rf_enabled = source.output.get_rf_enabled()
 ```
 
 单独控制 RF 开关：

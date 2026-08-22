@@ -16,7 +16,8 @@
 
 - SCPI Command Reference：List/Sweep 子系统约在 PDF 第 80-95 页，其中包含步进扫频、驻留时间、点触发源及触发沿命令。
 - SCPI Command Reference：Trigger 子系统约在 PDF 第 241-245 页，其中包含整次扫频触发源、TRIG 1/TRIG 2 和触发沿命令。
-- User's Guide：后面板接口约在 PDF 第 29-41 页；步进与列表扫频约在 PDF 第 66-73 页。
+- SCPI Command Reference：固定频率、功率与 RF 状态命令位于 PDF 第 74-75、113-114 和 189 页。
+- User's Guide：后面板接口约在 PDF 第 29-41 页；LAN 设置位于第 49-50 页；步进与列表扫频约在第 66-73 页。
 - Programming Guide：远程操作及 LAN 接口位于前半部分，可用于确认网线控制能力和连接配置。
 - Connectivity Guide 是较早的通用连接文档，只用于网络连接背景；具体命令以 N5171B SCPI Command Reference 为准。
 
