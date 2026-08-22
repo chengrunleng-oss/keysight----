@@ -1,5 +1,5 @@
-from .configs import ext_hardware
-from .controller import N5171B
+from n5171b.configs import ext_hardware
+from n5171b.controller import N5171B
 
 # ip_address = ext_hardware["Keysight N5171B"]["ip_address"]
 with N5171B() as instrument:
