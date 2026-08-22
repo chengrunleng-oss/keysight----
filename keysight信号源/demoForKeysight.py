@@ -1,11 +1,11 @@
-from n5171b.configs import ext_hardware
-from n5171b.controller import N5171B
+from n5171b import N5171B
 
-# ip_address = ext_hardware["Keysight N5171B"]["ip_address"]
-with N5171B() as instrument:
 
-    idn = instrument.connect()
-    print(f"Connected to: {idn}")
-
-    print(f"Frequency: {instrument.output.get_frequency_mhz()} MHz")
-    print(f"Power: {instrument.output.get_power_dbm()} dBm")
+with N5171B("192.168.1.100") as source:
+    result = source.list_sweep.run_linear_sweep(
+        start_mhz=100,
+        stop_mhz=1000,
+        points=101,
+        sweep_time_s=1.01,
+    )
+    print(result)

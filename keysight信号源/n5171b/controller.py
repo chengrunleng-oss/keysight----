@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from .connection import ScpiConnection
-from .output import OutputController
-from .sweep import SweepController
 from .configs import ext_hardware
-host_ip = ext_hardware["host"]["ip_address"]
+from .list_sweep import ListSweepController
+from .output import OutputController
+
+
 Keysight_ip = ext_hardware["Keysight N5171B"]["ip_address"]
 
 
@@ -16,7 +17,7 @@ class N5171B:
     def __init__(self, host: str = Keysight_ip, port: int = 5025, timeout: float = 5.0) -> None:
         self.scpi = ScpiConnection(host, port, timeout)
         self.output = OutputController(self.scpi)
-        self.sweep = SweepController(self.scpi)
+        self.list_sweep = ListSweepController(self.scpi)
 
     def connect(self) -> str:
         return self.scpi.connect()

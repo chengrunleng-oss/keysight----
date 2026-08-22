@@ -53,10 +53,23 @@ class ScpiConnection:
         payload = "\n".join(cleaned) + "\n"
         self._require_socket().sendall(payload.encode("ascii"))
 
-    def query(self, command: str) -> str:
+    def query(self, command: str, timeout: float | None = None) -> str:
         """Send one SCPI query and return one response line."""
-        self.write(command)
-        return self._readline()
+        instrument_socket = self._require_socket()
+        previous_timeout = instrument_socket.gettimeout()
+        if timeout is not None:
+            if timeout <= 0:
+                raise ValueError("timeout must be greater than 0")
+            instrument_socket.settimeout(timeout)
+        try:
+            self.write(command)
+            return self._readline()
+        except TimeoutError:
+            self.close()
+            raise
+        finally:
+            if self._socket is instrument_socket:
+                instrument_socket.settimeout(previous_timeout)
 
     def _readline(self) -> str:
         instrument_socket = self._require_socket()

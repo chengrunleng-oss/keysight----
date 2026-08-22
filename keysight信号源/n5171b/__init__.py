@@ -2,12 +2,14 @@
 
 from .connection import ScpiConnection
 from .controller import N5171B
+from .list_sweep import DwellSetting, LinearSweepSettings, ListSweepController
 from .output import OutputController
-from .sweep import SweepController
 
 __all__ = [
+    "DwellSetting",
+    "LinearSweepSettings",
+    "ListSweepController",
     "N5171B",
     "OutputController",
     "ScpiConnection",
-    "SweepController",
 ]
