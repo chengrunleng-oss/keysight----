@@ -38,6 +38,7 @@ class LinearSweepSettings:
     start_mhz: float
     stop_mhz: float
     points: int
+    direction: str
     requested_sweep_time_s: float
     requested_dwell_s: float
     actual_dwell_s: float
@@ -47,6 +48,16 @@ class LinearSweepSettings:
     def programmed_dwell_time_s(self) -> float:
         """Return the dwell-only duration; switching time is not included."""
         return self.actual_dwell_s * self.points
+
+    @property
+    def output_start_mhz(self) -> float:
+        """Return the first frequency emitted in the selected direction."""
+        return self.start_mhz if self.direction == "forward" else self.stop_mhz
+
+    @property
+    def output_stop_mhz(self) -> float:
+        """Return the final frequency emitted in the selected direction."""
+        return self.stop_mhz if self.direction == "forward" else self.start_mhz
 
 
 class ListSweepController:
@@ -89,6 +100,7 @@ class ListSweepController:
         stop_mhz: float,
         points: int,
         sweep_time_s: float,
+        direction: str = "forward",
         rf_on: bool = True,
         completion_timeout_s: float | None = None,
     ) -> LinearSweepSettings:
@@ -98,15 +110,13 @@ class ListSweepController:
             stop_mhz=stop_mhz,
             points=points,
             sweep_time_s=sweep_time_s,
+            direction=direction,
         )
         self.scpi.write_many(
             "LIST:TRIG:SOUR IMM",
             "TRIG:SOUR IMM",
             "INIT:CONT OFF",
-        )
-        self._enter_list_at_first_point()
-        self.scpi.write_many(
-            "LIST:MODE AUTO",
+            "FREQ:MODE LIST",
             f"OUTP {'ON' if rf_on else 'OFF'}",
         )
         self._raise_if_scpi_error()
@@ -124,6 +134,7 @@ class ListSweepController:
         if self.scpi.query("*OPC?", timeout=timeout).strip() != "1":
             raise RuntimeError("instrument did not report sweep completion")
         self._raise_if_scpi_error()
+        self._assert_completed_endpoint(settings)
         return settings
 
     def arm_linear_sweep_for_trigger(
@@ -132,6 +143,7 @@ class ListSweepController:
         stop_mhz: float,
         points: int,
         sweep_time_s: float,
+        direction: str = "forward",
         trigger_input: str = "TRIG1",
         edge: str = "POS",
         rf_on: bool = True,
@@ -143,6 +155,7 @@ class ListSweepController:
             stop_mhz=stop_mhz,
             points=points,
             sweep_time_s=sweep_time_s,
+            direction=direction,
         )
         self.scpi.write_many(
             "LIST:TRIG:SOUR IMM",
@@ -150,10 +163,7 @@ class ListSweepController:
             f"TRIG:SLOP {edge}",
             "TRIG:SOUR EXT",
             "INIT:CONT OFF",
-        )
-        self._enter_list_at_first_point()
-        self.scpi.write_many(
-            "LIST:MODE AUTO",
+            "FREQ:MODE LIST",
             f"OUTP {'ON' if rf_on else 'OFF'}",
         )
         self._raise_if_scpi_error()
@@ -174,10 +184,13 @@ class ListSweepController:
         stop_mhz: float,
         points: int,
         sweep_time_s: float,
+        direction: str,
     ) -> LinearSweepSettings:
         start, stop, point_count, sweep_time = _linear_parameters(
             start_mhz, stop_mhz, points, sweep_time_s
         )
+        sweep_direction, scpi_direction = _sweep_direction(direction)
+        self._assert_ready_endpoint(sweep_direction, point_count)
         minimum = self.measure_minimum_dwell()
         requested_dwell = sweep_time / point_count
         if requested_dwell < minimum:
@@ -203,23 +216,20 @@ class ListSweepController:
         self.scpi.write("*CLS")
         self.scpi.write_many(
             "ABOR",
-            f"FREQ:CW {_number(frequencies_hz[0])}",
-            "FREQ:MODE CW",
             "POW:MODE FIX",
             "LIST:TYPE LIST",
-            "LIST:MODE MAN",
-            "LIST:DIR UP",
+            "LIST:MODE AUTO",
+            f"LIST:DIR {scpi_direction}",
             "LIST:RETR OFF",
             "LIST:DWEL:TYPE LIST",
             f"LIST:FREQ {frequency_values}",
             f"LIST:DWEL {dwell_values}",
-            "LIST:MAN 1",
         )
 
         actual_dwells = self._query_dwell_values()
-        manual_point = self._query_list_point("LIST:MAN?")
         frequency_points = int(float(self.scpi.query("LIST:FREQ:POIN?")))
         dwell_points = int(float(self.scpi.query("LIST:DWEL:POIN?")))
+        current_point = self._query_list_point()
         self._raise_if_scpi_error()
 
         if frequency_points != point_count or dwell_points != point_count:
@@ -227,9 +237,11 @@ class ListSweepController:
                 "instrument did not accept the complete list: "
                 f"frequency points={frequency_points}, dwell points={dwell_points}"
             )
-        if manual_point != 1:
+        expected_point = _starting_point(sweep_direction, point_count)
+        if current_point != expected_point:
             raise RuntimeError(
-                f"instrument did not select list point 1; read back {manual_point}"
+                "instrument changed the AUTO sweep point while loading the list: "
+                f"expected {expected_point}, read back {current_point}"
             )
         if len(actual_dwells) != point_count or any(
             not math.isclose(
@@ -245,6 +257,7 @@ class ListSweepController:
             start_mhz=start,
             stop_mhz=stop,
             points=point_count,
+            direction=sweep_direction,
             requested_sweep_time_s=sweep_time,
             requested_dwell_s=requested_dwell,
             actual_dwell_s=actual_dwells[0],
@@ -287,23 +300,43 @@ class ListSweepController:
         except ValueError as error:
             raise RuntimeError(f"unexpected LIST:DWEL? response: {response!r}") from error
 
-    def _enter_list_at_first_point(self) -> None:
-        """Enter LIST mode and verify that point 1 is active before sweeping."""
-        self.scpi.write("FREQ:MODE LIST")
-        current_point = self._query_list_point("LIST:CPO?")
+    def _assert_ready_endpoint(self, direction: str, points: int) -> None:
+        """Reject a sweep unless AUTO is already at its required start endpoint."""
+        self.scpi.write_many("*CLS", "ABOR")
+        sweep_type = self.scpi.query("LIST:TYPE?").strip().upper()
+        operation_mode = self.scpi.query("LIST:MODE?").strip().upper()
+        current_point = self._query_list_point()
         self._raise_if_scpi_error()
-        if current_point != 1:
+
+        if sweep_type != "LIST" or operation_mode != "AUTO":
             raise RuntimeError(
-                "instrument entered LIST mode at point "
-                f"{current_point}, not point 1"
+                "alternating sweeps require LIST:TYPE LIST and LIST:MODE AUTO; "
+                f"read back type={sweep_type}, mode={operation_mode}"
             )
 
-    def _query_list_point(self, command: str) -> int:
-        response = self.scpi.query(command).strip()
+        expected_point = _starting_point(direction, points)
+        if current_point != expected_point:
+            raise RuntimeError(
+                f"{direction} sweep requires AUTO point {expected_point} before "
+                f"the list is changed; current point is {current_point}"
+            )
+
+    def _assert_completed_endpoint(self, settings: LinearSweepSettings) -> None:
+        expected_point = _ending_point(settings.direction, settings.points)
+        current_point = self._query_list_point()
+        self._raise_if_scpi_error()
+        if current_point != expected_point:
+            raise RuntimeError(
+                "sweep completed at an unexpected AUTO point: "
+                f"expected {expected_point}, read back {current_point}"
+            )
+
+    def _query_list_point(self) -> int:
+        response = self.scpi.query("LIST:CPO?").strip()
         try:
             return int(float(response))
         except ValueError as error:
-            raise RuntimeError(f"unexpected {command} response: {response!r}") from error
+            raise RuntimeError(f"unexpected LIST:CPO? response: {response!r}") from error
 
     def _raise_if_scpi_error(self) -> None:
         response = self.scpi.query("SYST:ERR?").strip()
@@ -369,6 +402,25 @@ def _trigger_settings(trigger_input: str, edge: str) -> tuple[str, str]:
     if trigger_edge not in {"POS", "NEG"}:
         raise ValueError("edge must be POS or NEG")
     return input_name, trigger_edge
+
+
+def _sweep_direction(direction: str) -> tuple[str, str]:
+    if not isinstance(direction, str):
+        raise TypeError("direction must be a string")
+    normalized = direction.lower()
+    if normalized == "forward":
+        return normalized, "UP"
+    if normalized == "reverse":
+        return normalized, "DOWN"
+    raise ValueError("direction must be 'forward' or 'reverse'")
+
+
+def _starting_point(direction: str, points: int) -> int:
+    return 1 if direction == "forward" else points
+
+
+def _ending_point(direction: str, points: int) -> int:
+    return points if direction == "forward" else 1
 
 
 def _number(value: float) -> str:

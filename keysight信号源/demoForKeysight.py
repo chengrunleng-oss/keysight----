@@ -7,5 +7,6 @@ with N5171B("192.168.1.100") as source:
         stop_mhz=1000,
         points=101,
         sweep_time_s=1.01,
+        direction="forward",
     )
     print(result)

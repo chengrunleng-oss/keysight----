@@ -78,28 +78,55 @@ with N5171B("192.168.1.100") as source:
         stop_mhz=1000,
         points=101,
         sweep_time_s=1.01,
+        direction="forward",
     )
 
+    print("列表排列:", result.start_mhz, "->", result.stop_mhz)
+    print("实际扫描:", result.output_start_mhz, "->", result.output_stop_mhz)
     print("每点实际 dwell:", result.actual_dwell_s)
     print("实际写入的 dwell 总时间:", result.programmed_dwell_time_s)
 ```
 
-这个函数会完成以下操作：
+`start_mhz` 和 `stop_mhz` 始终决定频率表从点 1 到点 N 的排列，两者谁大谁小都可以。`direction` 决定仪器沿点号正着还是反着扫描：
 
-1. 生成包含起始和终止频率的等间隔频率表。
-2. 按 `sweep_time_s / points` 计算每点 dwell。
-3. 检查 dwell 不小于仪器回读的最小 dwell，并按 1 us 分辨率量化。
-4. 写入并回读完整的频率点数、dwell 点数和 dwell 值。
-5. 设置 `LIST:RETR OFF`，确保扫描结束后保持在最后一个频点。
-6. 先把 CW 频率预置为本次起始频率，再切到 CW 模式持续承接 RF 输出。
-7. 用手动列表模式把当前点预定位到第一个频点，并用 `LIST:CPO?` 确认当前点为 1。
-8. 切换为自动列表模式并启动单次扫描；函数等待仪器报告扫描完成后才返回。
+| 参数 | SCPI 方向 | 实际扫描 | 扫描后点号 |
+|---|---|---|---:|
+| `direction="forward"` | `LIST:DIR UP` | `start_mhz -> stop_mhz` | N |
+| `direction="reverse"` | `LIST:DIR DOWN` | `stop_mhz -> start_mhz` | 1 |
 
-`LIST:RETR OFF` 保存的是扫描结束时的列表点号，而不是旧频率值。比如当前点号为最后一点 N，写入新的 `5 -> 10 MHz` 列表后，点号 N 就对应新表的 `10 MHz`；写入 `15 -> 20 MHz` 后，同一个点号 N 又对应 `20 MHz`。如果直接进入 LIST 模式，就会分别短暂输出 10、20 MHz，然后 `INIT` 才回到各自的第一点。
+程序固定使用 `LIST:MODE AUTO` 和 `LIST:RETR OFF`，不再通过 CW 或 MAN 模式重置点号。正向扫描结束后保持在点 N，下一次反向扫描直接从点 N 开始；反向扫描结束后保持在点 1，下一次正向扫描直接从点 1 开始。正常交替时不会关闭 RF，也不会在扫描前经过列表的另一端。
 
-默认的 `rf_on=True` 路径不会关闭 RF。它先让 CW 模式在本次起始频率上持续输出，再配置新列表并将点号设为 1；切回 LIST 时 CW 频率和列表第一点相同，因此不会先输出新列表的末点，也不会出现人为设置的 RF 空白期。不同频率之间仍然存在仪器本身的切频瞬态，软件不能保证相位连续。只有显式传入 `rf_on=False` 时，函数才会关闭 RF。
+### 连续交替不同扫描范围
 
-起始频率可以小于或大于终止频率。`100 -> 1000 MHz` 会生成递增表，`1000 -> 100 MHz` 会生成递减表；两种方向都会在结束后停留在传入的 `stop_mhz`。
+下面三次调用的实际输出依次为 `5 -> 10 MHz`、`15 -> 20 MHz`、`25 -> 30 MHz`：
+
+```python
+common = {"points": 101, "sweep_time_s": 1.01}
+
+source.list_sweep.run_linear_sweep(
+    start_mhz=5, stop_mhz=10, direction="forward", **common
+)
+source.list_sweep.run_linear_sweep(
+    start_mhz=20, stop_mhz=15, direction="reverse", **common
+)
+source.list_sweep.run_linear_sweep(
+    start_mhz=25, stop_mhz=30, direction="forward", **common
+)
+```
+
+第二张表必须排列为 `20 -> 15 MHz`，因为反向扫描会从它的最后一点 `15 MHz` 扫到第一点 `20 MHz`。
+
+每次写表前，程序都会在 AUTO 模式下检查 `LIST:CPO?`：
+
+- 正向扫描要求当前点为 `1`。
+- 反向扫描要求当前点等于本次传入的 `points`。
+- 状态不符合时，函数在写入新频率表之前抛出异常。
+
+因此，正向扫描后接反向扫描时，点数不能随意增加。例如上一次正向扫描使用 101 点并停在点 101，下一次反向扫描也必须从点 101 开始。反向扫描后停在点 1，接下来的正向扫描可以使用不同点数。
+
+第一次接管仪器、扫描被中止、TTL 尚未到来、连接重建或前面板状态被修改时，当前点不一定在所需端点。程序不会猜测或自动归位，而是报告当前点和所需点。不要在正常的正反交替扫描之间调用 `abort()`。
+
+这个函数会生成线性表、检查并量化 dwell、回读列表长度和 dwell，并在立即扫描完成后确认 AUTO 点号确实停在预期终点。默认 `rf_on=True` 不关闭 RF；显式传入 `rf_on=False` 才会关闭 RF。频率切换仍有仪器自身的瞬态，软件不能保证相位连续。
 
 `sweep_time_s` 表示所有扫描点的 dwell 之和，不是从第一点到最后一点的精确墙钟时间：
 
@@ -120,6 +147,7 @@ with N5171B("192.168.1.100") as source:
         stop_mhz=1000,
         points=101,
         sweep_time_s=1.01,
+        direction="forward",
         trigger_input="TRIG1",
         edge="POS",
     )
@@ -133,9 +161,9 @@ with N5171B("192.168.1.100") as source:
 - 整次扫描触发源为外部 `TRIG1`。
 - 列表内部的点触发源为 `IMM`，收到一个外部沿后，仪器按 dwell 自动扫完整张表。
 - `INIT:CONT OFF` 保证只执行一次。扫完后保持最后一个频点，不会自动重新等待第二次触发。
-- 进入等待状态前，程序会先在 CW 模式持续输出起始频率，再把当前列表点设为第一点并回读确认；等待触发期间 RF 保持在起始频率，不会先短暂输出新列表的末点。
+- 进入等待状态前，程序确认 AUTO 当前点就是所选方向的起始端点。等待期间 RF 保持在该频率。
 
-要再次等待一个触发，需要再次调用 `arm_linear_sweep_for_trigger()`。`edge="NEG"` 可改为下降沿，`trigger_input` 还可以选择 `TRIG2` 或 `PULSE`。
+要再次等待一个触发，需要在上一段扫描完成后，以相反的 `direction` 再次调用 `arm_linear_sweep_for_trigger()`。`edge="NEG"` 可改为下降沿，`trigger_input` 还可以选择 `TRIG2` 或 `PULSE`。
 
 中止正在运行或等待触发的扫描：
 
