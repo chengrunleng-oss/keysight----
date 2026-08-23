@@ -219,11 +219,11 @@ class ListSweepController:
             "POW:MODE FIX",
             "LIST:TYPE LIST",
             "LIST:MODE AUTO",
-            f"LIST:DIR {scpi_direction}",
             "LIST:RETR OFF",
             "LIST:DWEL:TYPE LIST",
             f"LIST:FREQ {frequency_values}",
             f"LIST:DWEL {dwell_values}",
+            f"LIST:DIR {scpi_direction}",
         )
 
         actual_dwells = self._query_dwell_values()
