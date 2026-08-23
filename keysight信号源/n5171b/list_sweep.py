@@ -103,7 +103,10 @@ class ListSweepController:
             "LIST:TRIG:SOUR IMM",
             "TRIG:SOUR IMM",
             "INIT:CONT OFF",
-            "FREQ:MODE LIST",
+        )
+        self._enter_list_at_first_point()
+        self.scpi.write_many(
+            "LIST:MODE AUTO",
             f"OUTP {'ON' if rf_on else 'OFF'}",
         )
         self._raise_if_scpi_error()
@@ -147,7 +150,10 @@ class ListSweepController:
             f"TRIG:SLOP {edge}",
             "TRIG:SOUR EXT",
             "INIT:CONT OFF",
-            "FREQ:MODE LIST",
+        )
+        self._enter_list_at_first_point()
+        self.scpi.write_many(
+            "LIST:MODE AUTO",
             f"OUTP {'ON' if rf_on else 'OFF'}",
         )
         self._raise_if_scpi_error()
@@ -197,18 +203,21 @@ class ListSweepController:
         self.scpi.write("*CLS")
         self.scpi.write_many(
             "ABOR",
+            f"FREQ:CW {_number(frequencies_hz[0])}",
             "FREQ:MODE CW",
             "POW:MODE FIX",
             "LIST:TYPE LIST",
-            "LIST:MODE AUTO",
+            "LIST:MODE MAN",
             "LIST:DIR UP",
             "LIST:RETR OFF",
             "LIST:DWEL:TYPE LIST",
             f"LIST:FREQ {frequency_values}",
             f"LIST:DWEL {dwell_values}",
+            "LIST:MAN 1",
         )
 
         actual_dwells = self._query_dwell_values()
+        manual_point = self._query_list_point("LIST:MAN?")
         frequency_points = int(float(self.scpi.query("LIST:FREQ:POIN?")))
         dwell_points = int(float(self.scpi.query("LIST:DWEL:POIN?")))
         self._raise_if_scpi_error()
@@ -217,6 +226,10 @@ class ListSweepController:
             raise RuntimeError(
                 "instrument did not accept the complete list: "
                 f"frequency points={frequency_points}, dwell points={dwell_points}"
+            )
+        if manual_point != 1:
+            raise RuntimeError(
+                f"instrument did not select list point 1; read back {manual_point}"
             )
         if len(actual_dwells) != point_count or any(
             not math.isclose(
@@ -274,6 +287,24 @@ class ListSweepController:
         except ValueError as error:
             raise RuntimeError(f"unexpected LIST:DWEL? response: {response!r}") from error
 
+    def _enter_list_at_first_point(self) -> None:
+        """Enter LIST mode and verify that point 1 is active before sweeping."""
+        self.scpi.write("FREQ:MODE LIST")
+        current_point = self._query_list_point("LIST:CPO?")
+        self._raise_if_scpi_error()
+        if current_point != 1:
+            raise RuntimeError(
+                "instrument entered LIST mode at point "
+                f"{current_point}, not point 1"
+            )
+
+    def _query_list_point(self, command: str) -> int:
+        response = self.scpi.query(command).strip()
+        try:
+            return int(float(response))
+        except ValueError as error:
+            raise RuntimeError(f"unexpected {command} response: {response!r}") from error
+
     def _raise_if_scpi_error(self) -> None:
         response = self.scpi.query("SYST:ERR?").strip()
         code_text = response.split(",", 1)[0]
@@ -293,8 +324,8 @@ def _linear_parameters(
 ) -> tuple[float, float, int, float]:
     start = _positive_finite("start_mhz", start_mhz)
     stop = _positive_finite("stop_mhz", stop_mhz)
-    if start >= stop:
-        raise ValueError("start_mhz must be lower than stop_mhz")
+    if start == stop:
+        raise ValueError("start_mhz and stop_mhz must be different")
     if isinstance(points, bool) or not isinstance(points, int):
         raise TypeError("points must be an integer")
     if not 2 <= points <= MAX_LIST_POINTS:
