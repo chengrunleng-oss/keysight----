@@ -89,6 +89,8 @@ with N5171B("192.168.1.100") as source:
 
 `start_mhz` 和 `stop_mhz` 始终决定频率表从点 1 到点 N 的排列，两者谁大谁小都可以。`direction` 决定仪器沿点号正着还是反着扫描：
 
+频率参数的单位是 MHz，N5171B 的最低频率是 `0.009 MHz`（9 kHz）。例如 `1e-6 MHz` 等于 1 Hz，并不是 1 MHz；程序会在通讯前拒绝低于 9 kHz 的起止频率，避免仪器静默钳位后再产生列表错误。
+
 | 参数 | SCPI 方向 | 实际扫描 | 扫描后点号 |
 |---|---|---|---:|
 | `direction="forward"` | `LIST:DIR UP` | `start_mhz -> stop_mhz` | N |

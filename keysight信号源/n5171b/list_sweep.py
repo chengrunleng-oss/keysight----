@@ -13,6 +13,7 @@ DOCUMENTED_MIN_DWELL_S = 100e-6
 DOCUMENTED_MAX_DWELL_S = 100.0
 DWELL_RESOLUTION_S = 1e-6
 MAX_LIST_POINTS = 3201
+MIN_FREQUENCY_MHZ = 0.009
 
 
 @dataclass(frozen=True)
@@ -403,6 +404,14 @@ def _linear_parameters(
 ) -> tuple[float, float, int, float]:
     start = _positive_finite("start_mhz", start_mhz)
     stop = _positive_finite("stop_mhz", stop_mhz)
+    if start < MIN_FREQUENCY_MHZ:
+        raise ValueError(
+            f"start_mhz must be at least {MIN_FREQUENCY_MHZ:g} MHz (9 kHz)"
+        )
+    if stop < MIN_FREQUENCY_MHZ:
+        raise ValueError(
+            f"stop_mhz must be at least {MIN_FREQUENCY_MHZ:g} MHz (9 kHz)"
+        )
     if start == stop:
         raise ValueError("start_mhz and stop_mhz must be different")
     if isinstance(points, bool) or not isinstance(points, int):

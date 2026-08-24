@@ -1,6 +1,11 @@
 """Fixed-frequency and RF output control."""
 
+import math
+
 from .connection import ScpiConnection
+
+
+MIN_FREQUENCY_MHZ = 0.009
 
 
 class OutputController:
@@ -19,22 +24,24 @@ class OutputController:
         self, frequency_mhz: float, power_dbm: float, rf_on: bool = True
     ) -> None:
         """Set one fixed frequency and power level."""
+        frequency = _frequency_mhz(frequency_mhz)
         self.scpi.write_many(
             "ABOR",
             "OUTP OFF",
             "FREQ:MODE CW",
             "POW:MODE FIX",
-            f"FREQ {_number(frequency_mhz)} MHZ",
+            f"FREQ {_number(frequency)} MHZ",
             f"POW {_number(power_dbm)} DBM",
             f"OUTP {'ON' if rf_on else 'OFF'}",
         )
 
     def set_frequency(self, frequency_mhz: float) -> None:
         """Stop any sweep and set the fixed output frequency in MHz."""
+        frequency = _frequency_mhz(frequency_mhz)
         self.scpi.write_many(
             "ABOR",
             "FREQ:MODE CW",
-            f"FREQ {_number(frequency_mhz)} MHZ",
+            f"FREQ {_number(frequency)} MHZ",
         )
 
     def set_power(self, power_dbm: float) -> None:
@@ -78,6 +85,15 @@ class OutputController:
 
 def _number(value: float) -> str:
     return format(float(value), ".12g")
+
+
+def _frequency_mhz(value: float) -> float:
+    frequency = float(value)
+    if not math.isfinite(frequency) or frequency < MIN_FREQUENCY_MHZ:
+        raise ValueError(
+            f"frequency_mhz must be at least {MIN_FREQUENCY_MHZ:g} MHz (9 kHz)"
+        )
+    return frequency
 
 
 def _boolean(response: str) -> bool:

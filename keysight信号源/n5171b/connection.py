@@ -100,11 +100,12 @@ class ScpiConnection:
             return ()
 
         response = self.query(message, timeout=timeout)
-        values = tuple(response.split(";"))
+        values = _split_scpi_responses(response)
         if len(values) != query_count:
             raise RuntimeError(
                 "instrument returned an unexpected number of query responses: "
-                f"expected {query_count}, received {len(values)}"
+                f"expected {query_count}, received {len(values)}; "
+                f"raw response={response!r}"
             )
         return values
 
@@ -125,3 +126,30 @@ class ScpiConnection:
         if self._socket is None:
             raise RuntimeError("instrument is not connected")
         return self._socket
+
+
+def _split_scpi_responses(response: str) -> tuple[str, ...]:
+    """Split compound responses without treating semicolons in strings as separators."""
+    values: list[str] = []
+    current: list[str] = []
+    in_quotes = False
+    index = 0
+
+    while index < len(response):
+        character = response[index]
+        if character == '"':
+            current.append(character)
+            if in_quotes and index + 1 < len(response) and response[index + 1] == '"':
+                current.append('"')
+                index += 1
+            else:
+                in_quotes = not in_quotes
+        elif character == ";" and not in_quotes:
+            values.append("".join(current))
+            current.clear()
+        else:
+            current.append(character)
+        index += 1
+
+    values.append("".join(current))
+    return tuple(values)
