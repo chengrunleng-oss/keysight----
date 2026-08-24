@@ -65,15 +65,19 @@ class ListSweepController:
 
     def __init__(self, scpi: ScpiConnection) -> None:
         self.scpi = scpi
+        self._minimum_dwell_s: float | None = None
 
     def measure_minimum_dwell(self) -> float:
-        """Program the documented 100 us minimum and return its readback value."""
+        """Program the documented minimum once, then reuse its readback value."""
+        if self._minimum_dwell_s is not None:
+            return self._minimum_dwell_s
         result = self._set_and_read_back_dwell(
             requested_s=DOCUMENTED_MIN_DWELL_S,
             minimum_s=DOCUMENTED_MIN_DWELL_S,
             points=1,
         )
-        return result.actual_s
+        self._minimum_dwell_s = result.actual_s
+        return self._minimum_dwell_s
 
     def set_and_check_dwell(self, dwell_s: float) -> DwellSetting:
         """Set one list dwell value and verify the value reported by the instrument."""
@@ -112,12 +116,15 @@ class ListSweepController:
             sweep_time_s=sweep_time_s,
             direction=direction,
         )
-        self.scpi.write("LIST:TRIG:SOUR IMM")
-        self.scpi.write("TRIG:SOUR IMM")
-        self.scpi.write("INIT:CONT OFF")
-        self.scpi.write(f"OUTP {'ON' if rf_on else 'OFF'}")
-        self.scpi.write("FREQ:MODE LIST")
-        self._raise_if_scpi_error()
+        (error_response,) = self.scpi.execute(
+            "LIST:TRIG:SOUR IMM",
+            "TRIG:SOUR IMM",
+            "INIT:CONT OFF",
+            f"OUTP {'ON' if rf_on else 'OFF'}",
+            "FREQ:MODE LIST",
+            "SYST:ERR?",
+        )
+        self._raise_if_scpi_error(error_response)
 
         timeout = completion_timeout_s
         if timeout is None:
@@ -128,10 +135,11 @@ class ListSweepController:
         else:
             timeout = _positive_finite("completion_timeout_s", timeout)
 
-        self.scpi.write("INIT")
-        if self.scpi.query("*OPC?", timeout=timeout).strip() != "1":
+        (operation_complete,) = self.scpi.execute(
+            "INIT", "*OPC?", timeout=timeout
+        )
+        if operation_complete.strip() != "1":
             raise RuntimeError("instrument did not report sweep completion")
-        self._raise_if_scpi_error()
         self._assert_completed_endpoint(settings)
         return settings
 
@@ -155,16 +163,18 @@ class ListSweepController:
             sweep_time_s=sweep_time_s,
             direction=direction,
         )
-        self.scpi.write("LIST:TRIG:SOUR IMM")
-        self.scpi.write(f"TRIG:EXT:SOUR {trigger_input}")
-        self.scpi.write(f"TRIG:SLOP {edge}")
-        self.scpi.write("TRIG:SOUR EXT")
-        self.scpi.write("INIT:CONT OFF")
-        self.scpi.write(f"OUTP {'ON' if rf_on else 'OFF'}")
-        self.scpi.write("FREQ:MODE LIST")
-        self._raise_if_scpi_error()
-        self.scpi.write("INIT")
-        self._raise_if_scpi_error()
+        (error_response,) = self.scpi.execute(
+            "LIST:TRIG:SOUR IMM",
+            f"TRIG:EXT:SOUR {trigger_input}",
+            f"TRIG:SLOP {edge}",
+            "TRIG:SOUR EXT",
+            "INIT:CONT OFF",
+            f"OUTP {'ON' if rf_on else 'OFF'}",
+            "FREQ:MODE LIST",
+            "INIT",
+            "SYST:ERR?",
+        )
+        self._raise_if_scpi_error(error_response)
         return settings
 
     def abort(self, rf_off: bool = True) -> None:
@@ -187,16 +197,17 @@ class ListSweepController:
         )
         sweep_direction, scpi_direction = _sweep_direction(direction)
 
-        self.scpi.write("*CLS")
-        self.scpi.write("ABOR")
         hold_frequency_hz = self._assert_ready_endpoint(
             sweep_direction, point_count
         )
 
         # Keep the old endpoint on RF while the active list is being replaced.
-        self.scpi.write(f"FREQ:CW {_number(hold_frequency_hz)}")
-        self.scpi.write("FREQ:MODE CW")
-        self._raise_if_scpi_error()
+        (error_response,) = self.scpi.execute(
+            f"FREQ:CW {_number(hold_frequency_hz)}",
+            "FREQ:MODE CW",
+            "SYST:ERR?",
+        )
+        self._raise_if_scpi_error(error_response)
 
         minimum = self.measure_minimum_dwell()
         requested_dwell = sweep_time / point_count
@@ -220,21 +231,34 @@ class ListSweepController:
             _number(programmed_dwell) for _ in range(point_count)
         )
 
-        # Keep these writes separate so each hardware transition can be observed.
-        self.scpi.write("POW:MODE FIX")
-        self.scpi.write("LIST:TYPE LIST")
-        self.scpi.write("LIST:MODE AUTO")
-        self.scpi.write("LIST:RETR OFF")
-        self.scpi.write("LIST:DWEL:TYPE LIST")
-        self.scpi.write(f"LIST:FREQ {frequency_values}")
-        self.scpi.write(f"LIST:DWEL {dwell_values}")
-        self.scpi.write(f"LIST:DIR {scpi_direction}")
-
-        actual_dwells = self._query_dwell_values()
-        frequency_points = int(float(self.scpi.query("LIST:FREQ:POIN?")))
-        dwell_points = int(float(self.scpi.query("LIST:DWEL:POIN?")))
-        current_point = self._query_list_point()
-        self._raise_if_scpi_error()
+        (
+            dwell_response,
+            frequency_points_response,
+            dwell_points_response,
+            current_point_response,
+            error_response,
+        ) = self.scpi.execute(
+            "POW:MODE FIX",
+            "LIST:TYPE LIST",
+            "LIST:MODE AUTO",
+            "LIST:RETR OFF",
+            "LIST:DWEL:TYPE LIST",
+            f"LIST:FREQ {frequency_values}",
+            f"LIST:DWEL {dwell_values}",
+            f"LIST:DIR {scpi_direction}",
+            "LIST:DWEL?",
+            "LIST:FREQ:POIN?",
+            "LIST:DWEL:POIN?",
+            "LIST:CPO?",
+            "SYST:ERR?",
+        )
+        actual_dwells = _parse_float_list(dwell_response, "LIST:DWEL?")
+        frequency_points = _parse_integer(
+            frequency_points_response, "LIST:FREQ:POIN?"
+        )
+        dwell_points = _parse_integer(dwell_points_response, "LIST:DWEL:POIN?")
+        current_point = _parse_integer(current_point_response, "LIST:CPO?")
+        self._raise_if_scpi_error(error_response)
 
         if frequency_points != point_count or dwell_points != point_count:
             raise RuntimeError(
@@ -277,11 +301,15 @@ class ListSweepController:
         programmed = _quantize_dwell(requested_s)
         values = ",".join(_number(programmed) for _ in range(points))
 
-        self.scpi.write("*CLS")
-        self.scpi.write("LIST:DWEL:TYPE LIST")
-        self.scpi.write(f"LIST:DWEL {values}")
-        actual_values = self._query_dwell_values()
-        self._raise_if_scpi_error()
+        dwell_response, error_response = self.scpi.execute(
+            "*CLS",
+            "LIST:DWEL:TYPE LIST",
+            f"LIST:DWEL {values}",
+            "LIST:DWEL?",
+            "SYST:ERR?",
+        )
+        actual_values = _parse_float_list(dwell_response, "LIST:DWEL?")
+        self._raise_if_scpi_error(error_response)
 
         if len(actual_values) != points or any(
             not math.isclose(value, programmed, rel_tol=0.0, abs_tol=1e-12)
@@ -298,19 +326,28 @@ class ListSweepController:
             minimum_s=minimum_s,
         )
 
-    def _query_dwell_values(self) -> list[float]:
-        response = self.scpi.query("LIST:DWEL?")
-        try:
-            return [float(value.strip()) for value in response.split(",")]
-        except ValueError as error:
-            raise RuntimeError(f"unexpected LIST:DWEL? response: {response!r}") from error
-
     def _assert_ready_endpoint(self, direction: str, points: int) -> float:
         """Validate the AUTO endpoint and return its frequency in hertz."""
-        sweep_type = self.scpi.query("LIST:TYPE?").strip().upper()
-        operation_mode = self.scpi.query("LIST:MODE?").strip().upper()
-        current_point = self._query_list_point()
-        self._raise_if_scpi_error()
+        (
+            sweep_type_response,
+            operation_mode_response,
+            current_point_response,
+            frequencies_response,
+            error_response,
+        ) = self.scpi.execute(
+            "*CLS",
+            "ABOR",
+            "LIST:TYPE?",
+            "LIST:MODE?",
+            "LIST:CPO?",
+            "LIST:FREQ?",
+            "SYST:ERR?",
+        )
+        sweep_type = sweep_type_response.strip().upper()
+        operation_mode = operation_mode_response.strip().upper()
+        current_point = _parse_integer(current_point_response, "LIST:CPO?")
+        frequencies = _parse_float_list(frequencies_response, "LIST:FREQ?")
+        self._raise_if_scpi_error(error_response)
 
         if sweep_type != "LIST" or operation_mode != "AUTO":
             raise RuntimeError(
@@ -325,8 +362,6 @@ class ListSweepController:
                 f"the list is changed; current point is {current_point}"
             )
 
-        frequencies = self._query_frequency_values()
-        self._raise_if_scpi_error()
         if current_point > len(frequencies):
             raise RuntimeError(
                 "current AUTO point is outside the active frequency list: "
@@ -334,34 +369,23 @@ class ListSweepController:
             )
         return frequencies[current_point - 1]
 
-    def _query_frequency_values(self) -> list[float]:
-        response = self.scpi.query("LIST:FREQ?")
-        try:
-            return [float(value.strip()) for value in response.split(",")]
-        except ValueError as error:
-            raise RuntimeError(
-                f"unexpected LIST:FREQ? response: {response!r}"
-            ) from error
-
     def _assert_completed_endpoint(self, settings: LinearSweepSettings) -> None:
         expected_point = _ending_point(settings.direction, settings.points)
-        current_point = self._query_list_point()
-        self._raise_if_scpi_error()
+        current_point_response, error_response = self.scpi.query_many(
+            "LIST:CPO?", "SYST:ERR?"
+        )
+        current_point = _parse_integer(current_point_response, "LIST:CPO?")
+        self._raise_if_scpi_error(error_response)
         if current_point != expected_point:
             raise RuntimeError(
                 "sweep completed at an unexpected AUTO point: "
                 f"expected {expected_point}, read back {current_point}"
             )
 
-    def _query_list_point(self) -> int:
-        response = self.scpi.query("LIST:CPO?").strip()
-        try:
-            return int(float(response))
-        except ValueError as error:
-            raise RuntimeError(f"unexpected LIST:CPO? response: {response!r}") from error
-
-    def _raise_if_scpi_error(self) -> None:
-        response = self.scpi.query("SYST:ERR?").strip()
+    def _raise_if_scpi_error(self, response: str | None = None) -> None:
+        if response is None:
+            response = self.scpi.query("SYST:ERR?")
+        response = response.strip()
         code_text = response.split(",", 1)[0]
         try:
             code = int(code_text)
@@ -447,3 +471,17 @@ def _ending_point(direction: str, points: int) -> int:
 
 def _number(value: float) -> str:
     return format(float(value), ".12g")
+
+
+def _parse_float_list(response: str, command: str) -> list[float]:
+    try:
+        return [float(value.strip()) for value in response.split(",")]
+    except ValueError as error:
+        raise RuntimeError(f"unexpected {command} response: {response!r}") from error
+
+
+def _parse_integer(response: str, command: str) -> int:
+    try:
+        return int(float(response.strip()))
+    except ValueError as error:
+        raise RuntimeError(f"unexpected {command} response: {response!r}") from error

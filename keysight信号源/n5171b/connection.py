@@ -71,6 +71,43 @@ class ScpiConnection:
             if self._socket is instrument_socket:
                 instrument_socket.settimeout(previous_timeout)
 
+    def query_many(
+        self, *commands: str, timeout: float | None = None
+    ) -> tuple[str, ...]:
+        """Send several SCPI queries as one message and return their responses."""
+        cleaned = [command.strip() for command in commands if command.strip()]
+        if not cleaned:
+            return ()
+        if any("?" not in command for command in cleaned):
+            raise ValueError("query_many accepts query commands only")
+        return self.execute(*cleaned, timeout=timeout)
+
+    def execute(
+        self, *commands: str, timeout: float | None = None
+    ) -> tuple[str, ...]:
+        """Execute one compound SCPI message and return all query responses."""
+        cleaned = [command.strip() for command in commands if command.strip()]
+        if not cleaned:
+            return ()
+        absolute_commands = [
+            command if command.startswith("*") else f":{command.lstrip(':')}"
+            for command in cleaned
+        ]
+        query_count = sum("?" in command for command in cleaned)
+        message = ";".join(absolute_commands)
+        if query_count == 0:
+            self.write(message)
+            return ()
+
+        response = self.query(message, timeout=timeout)
+        values = tuple(response.split(";"))
+        if len(values) != query_count:
+            raise RuntimeError(
+                "instrument returned an unexpected number of query responses: "
+                f"expected {query_count}, received {len(values)}"
+            )
+        return values
+
     def _readline(self) -> str:
         instrument_socket = self._require_socket()
         while b"\n" not in self._buffer:
