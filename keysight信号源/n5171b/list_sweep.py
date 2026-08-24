@@ -112,13 +112,11 @@ class ListSweepController:
             sweep_time_s=sweep_time_s,
             direction=direction,
         )
-        self.scpi.write_many(
-            "LIST:TRIG:SOUR IMM",
-            "TRIG:SOUR IMM",
-            "INIT:CONT OFF",
-            "FREQ:MODE LIST",
-            f"OUTP {'ON' if rf_on else 'OFF'}",
-        )
+        self.scpi.write("LIST:TRIG:SOUR IMM")
+        self.scpi.write("TRIG:SOUR IMM")
+        self.scpi.write("INIT:CONT OFF")
+        self.scpi.write(f"OUTP {'ON' if rf_on else 'OFF'}")
+        self.scpi.write("FREQ:MODE LIST")
         self._raise_if_scpi_error()
 
         timeout = completion_timeout_s
@@ -157,15 +155,13 @@ class ListSweepController:
             sweep_time_s=sweep_time_s,
             direction=direction,
         )
-        self.scpi.write_many(
-            "LIST:TRIG:SOUR IMM",
-            f"TRIG:EXT:SOUR {trigger_input}",
-            f"TRIG:SLOP {edge}",
-            "TRIG:SOUR EXT",
-            "INIT:CONT OFF",
-            "FREQ:MODE LIST",
-            f"OUTP {'ON' if rf_on else 'OFF'}",
-        )
+        self.scpi.write("LIST:TRIG:SOUR IMM")
+        self.scpi.write(f"TRIG:EXT:SOUR {trigger_input}")
+        self.scpi.write(f"TRIG:SLOP {edge}")
+        self.scpi.write("TRIG:SOUR EXT")
+        self.scpi.write("INIT:CONT OFF")
+        self.scpi.write(f"OUTP {'ON' if rf_on else 'OFF'}")
+        self.scpi.write("FREQ:MODE LIST")
         self._raise_if_scpi_error()
         self.scpi.write("INIT")
         self._raise_if_scpi_error()
@@ -190,7 +186,18 @@ class ListSweepController:
             start_mhz, stop_mhz, points, sweep_time_s
         )
         sweep_direction, scpi_direction = _sweep_direction(direction)
-        self._assert_ready_endpoint(sweep_direction, point_count)
+
+        self.scpi.write("*CLS")
+        self.scpi.write("ABOR")
+        hold_frequency_hz = self._assert_ready_endpoint(
+            sweep_direction, point_count
+        )
+
+        # Keep the old endpoint on RF while the active list is being replaced.
+        self.scpi.write(f"FREQ:CW {_number(hold_frequency_hz)}")
+        self.scpi.write("FREQ:MODE CW")
+        self._raise_if_scpi_error()
+
         minimum = self.measure_minimum_dwell()
         requested_dwell = sweep_time / point_count
         if requested_dwell < minimum:
@@ -213,18 +220,15 @@ class ListSweepController:
             _number(programmed_dwell) for _ in range(point_count)
         )
 
-        self.scpi.write("*CLS")
-        self.scpi.write_many(
-            "ABOR",
-            "POW:MODE FIX",
-            "LIST:TYPE LIST",
-            "LIST:MODE AUTO",
-            "LIST:RETR OFF",
-            "LIST:DWEL:TYPE LIST",
-            f"LIST:FREQ {frequency_values}",
-            f"LIST:DWEL {dwell_values}",
-            f"LIST:DIR {scpi_direction}",
-        )
+        # Keep these writes separate so each hardware transition can be observed.
+        self.scpi.write("POW:MODE FIX")
+        self.scpi.write("LIST:TYPE LIST")
+        self.scpi.write("LIST:MODE AUTO")
+        self.scpi.write("LIST:RETR OFF")
+        self.scpi.write("LIST:DWEL:TYPE LIST")
+        self.scpi.write(f"LIST:FREQ {frequency_values}")
+        self.scpi.write(f"LIST:DWEL {dwell_values}")
+        self.scpi.write(f"LIST:DIR {scpi_direction}")
 
         actual_dwells = self._query_dwell_values()
         frequency_points = int(float(self.scpi.query("LIST:FREQ:POIN?")))
@@ -274,7 +278,8 @@ class ListSweepController:
         values = ",".join(_number(programmed) for _ in range(points))
 
         self.scpi.write("*CLS")
-        self.scpi.write_many("LIST:DWEL:TYPE LIST", f"LIST:DWEL {values}")
+        self.scpi.write("LIST:DWEL:TYPE LIST")
+        self.scpi.write(f"LIST:DWEL {values}")
         actual_values = self._query_dwell_values()
         self._raise_if_scpi_error()
 
@@ -300,9 +305,8 @@ class ListSweepController:
         except ValueError as error:
             raise RuntimeError(f"unexpected LIST:DWEL? response: {response!r}") from error
 
-    def _assert_ready_endpoint(self, direction: str, points: int) -> None:
-        """Reject a sweep unless AUTO is already at its required start endpoint."""
-        self.scpi.write_many("*CLS", "ABOR")
+    def _assert_ready_endpoint(self, direction: str, points: int) -> float:
+        """Validate the AUTO endpoint and return its frequency in hertz."""
         sweep_type = self.scpi.query("LIST:TYPE?").strip().upper()
         operation_mode = self.scpi.query("LIST:MODE?").strip().upper()
         current_point = self._query_list_point()
@@ -320,6 +324,24 @@ class ListSweepController:
                 f"{direction} sweep requires AUTO point {expected_point} before "
                 f"the list is changed; current point is {current_point}"
             )
+
+        frequencies = self._query_frequency_values()
+        self._raise_if_scpi_error()
+        if current_point > len(frequencies):
+            raise RuntimeError(
+                "current AUTO point is outside the active frequency list: "
+                f"point={current_point}, frequency points={len(frequencies)}"
+            )
+        return frequencies[current_point - 1]
+
+    def _query_frequency_values(self) -> list[float]:
+        response = self.scpi.query("LIST:FREQ?")
+        try:
+            return [float(value.strip()) for value in response.split(",")]
+        except ValueError as error:
+            raise RuntimeError(
+                f"unexpected LIST:FREQ? response: {response!r}"
+            ) from error
 
     def _assert_completed_endpoint(self, settings: LinearSweepSettings) -> None:
         expected_point = _ending_point(settings.direction, settings.points)

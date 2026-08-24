@@ -94,7 +94,19 @@ with N5171B("192.168.1.100") as source:
 | `direction="forward"` | `LIST:DIR UP` | `start_mhz -> stop_mhz` | N |
 | `direction="reverse"` | `LIST:DIR DOWN` | `stop_mhz -> start_mhz` | 1 |
 
-程序固定使用 `LIST:MODE AUTO` 和 `LIST:RETR OFF`，不再通过 CW 或 MAN 模式重置点号。正向扫描结束后保持在点 N，下一次反向扫描直接从点 N 开始；反向扫描结束后保持在点 1，下一次正向扫描直接从点 1 开始。正常交替时不会关闭 RF，也不会在扫描前经过列表的另一端。
+程序固定使用 `LIST:MODE AUTO` 和 `LIST:RETR OFF`，不使用 MAN 模式重置点号。正向扫描结束后保持在点 N，下一次反向扫描直接从点 N 开始；反向扫描结束后保持在点 1，下一次正向扫描直接从点 1 开始。
+
+每次更换扫描表时，程序按以下三个阶段执行：
+
+```text
+1. ABOR，读取旧列表当前点的频率，写入 FREQ:CW，然后执行 FREQ:MODE CW
+2. 保持 CW 模式，逐条写入 LIST 的类型、模式、回扫、频率、dwell 和方向
+3. 列表回读校验通过后，单独执行 FREQ:MODE LIST，再执行 INIT
+```
+
+`FREQ:MODE CW` 只关闭频率扫描，不会关闭 RF 输出。切换到 CW 前写入的频率来自旧列表当前点，因此编辑新列表时应继续保持原来的端点频率。切回 LIST 后，输出才转到新列表所选方向的起始点。
+
+以上命令在 `n5171b/list_sweep.py` 中均使用独立的 `write()` 调用，没有合并到 `write_many()`。需要定位仪器在哪一步改变频率时，可以临时在相邻命令之间插入 `time.sleep(...)`。
 
 ### 连续交替不同扫描范围
 
@@ -116,7 +128,7 @@ source.list_sweep.run_linear_sweep(
 
 第二张表必须排列为 `20 -> 15 MHz`，因为反向扫描会从它的最后一点 `15 MHz` 扫到第一点 `20 MHz`。
 
-每次写表前，程序都会在 AUTO 模式下检查 `LIST:CPO?`：
+每次写表前，程序都会在 AUTO 模式下检查 `LIST:CPO?`，并从旧的 `LIST:FREQ?` 中读取该点的保持频率：
 
 - 正向扫描要求当前点为 `1`。
 - 反向扫描要求当前点等于本次传入的 `points`。
