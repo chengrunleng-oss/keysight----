@@ -169,7 +169,7 @@ class ListSweepController:
 
     def abort(self, rf_off: bool = True) -> None:
         """Abort a running or armed sweep and return to fixed-frequency mode."""
-        commands = ["ABOR", "FREQ:MODE CW"]
+        commands = ["INIT:CONT OFF", "ABOR", "FREQ:MODE CW"]
         if rf_off:
             commands.append("OUTP OFF")
         self.scpi.write_many(*commands)
@@ -188,6 +188,7 @@ class ListSweepController:
         sweep_direction, scpi_direction = _sweep_direction(direction)
 
         self.scpi.write("*CLS")
+        self.scpi.write("INIT:CONT OFF")
         self.scpi.write("ABOR")
         hold_frequency_hz = self._assert_ready_endpoint(
             sweep_direction, point_count

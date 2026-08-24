@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .connection import ScpiConnection
 from .configs import ext_hardware
+from .cycle_sweep import CycleSweepController
 from .list_sweep import ListSweepController
 from .output import OutputController
 
@@ -18,6 +19,7 @@ class N5171B:
         self.scpi = ScpiConnection(host, port, timeout)
         self.output = OutputController(self.scpi)
         self.list_sweep = ListSweepController(self.scpi)
+        self.cycle_sweep = CycleSweepController(self.scpi, self.list_sweep)
 
     def connect(self) -> str:
         return self.scpi.connect()

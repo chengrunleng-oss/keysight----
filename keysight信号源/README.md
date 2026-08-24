@@ -8,7 +8,8 @@
 n5171b/
 |-- connection.py   # TCP 连接、SCPI 指令发送和查询
 |-- output.py       # 固定频率、功率和 RF 开关
-|-- list_sweep.py   # dwell 检查、线性列表扫描和单次 TTL 触发
+|-- list_sweep.py   # dwell 检查、单程线性列表扫描
+|-- cycle_sweep.py  # f0-f1-f0 周期表和重复 TTL 触发
 |-- controller.py   # 组合以上独立模块
 |-- configs.py      # 默认仪器 IP
 `-- __init__.py     # 对外 Python 接口
@@ -182,6 +183,75 @@ with N5171B("192.168.1.100") as source:
 ```python
 source.list_sweep.abort()
 ```
+
+## 完整往返周期扫描
+
+`source.cycle_sweep.run()` 只需写入一张周期表，表内顺序固定为：
+
+```text
+f0 -> f1 -> 在 f1 连续停留 -> f1 -> f0
+```
+
+点 1 和最后一点都是 `f0`。程序使用 `LIST:RETR ON`，每个周期结束后回到逻辑点 1；由于首尾频率相同，回到点 1 不会引入额外频率跳变。
+
+写表期间程序仍保持原来的 CW 输出；重新启用列表时，输出会有意切换到 `f0` 并等待扫描或触发。若要求配置过程前后也没有额外频率台阶，应让 `f0_mhz` 等于调用函数前正在输出的频率。
+
+立即完成一个周期：
+
+```python
+from n5171b import N5171B
+
+with N5171B("192.168.1.100") as source:
+    result = source.cycle_sweep.run(
+        f0_mhz=5,
+        f1_mhz=10,
+        transition_points=101,
+        f1_hold_points=200,
+        dwell_s=0.001,
+        trigger_mode="immediate",
+    )
+
+    print("总点数:", result.total_points)
+    print("f1 dwell 停留时间:", result.f1_hold_time_s)
+    print("周期 dwell 总时间:", result.programmed_cycle_time_s)
+```
+
+配置一次，然后让每个 TTL 上升沿启动一个完整周期：
+
+```python
+result = source.cycle_sweep.run(
+    f0_mhz=5,
+    f1_mhz=10,
+    transition_points=101,
+    f1_hold_points=200,
+    dwell_s=0.001,
+    trigger_mode="external",
+    trigger_input="TRIG1",
+    edge="POS",
+)
+
+# 函数返回后仪器保持在 f0 并持续等待触发。
+# 每个 TTL 上升沿执行一个完整周期，周期结束后自动等待下一个沿。
+```
+
+参数含义：
+
+- `transition_points` 是每个单程包含 `f0` 和 `f1` 两端点的点数，最少为 2。
+- `f1_hold_points` 是整张列表中连续出现 `f1` 的总次数，最少为 1。
+- 总点数为 `2 * transition_points + f1_hold_points - 2`，不能超过 3201。
+- `f1` 的 dwell 停留时间为 `f1_hold_points * actual_dwell_s`。
+- `dwell_s` 应用于整张表的每个点，程序仍会量化、实机回读并检查最小 dwell。
+- `f0_mhz` 可以大于 `f1_mhz`，列表会按传入顺序先从 `f0` 走到 `f1`，再返回 `f0`。
+
+外部模式使用 `INIT:CONT ON`，不需要每个周期都通过网线重新发送 `INIT`。停止连续等待或正在执行的周期时调用：
+
+只有仪器已经完成上一周期并重新进入等待状态后，下一个 TTL 沿才应用于下一周期。不要依赖仪器缓存周期执行期间到来的额外沿；TTL 周期应大于实际扫频周期时间与仪器额外处理时间之和。
+
+```python
+source.cycle_sweep.abort()
+```
+
+`abort()` 会先关闭连续重启，再中止扫描并进入 CW，避免 `ABOR` 后立刻重新进入外部触发等待。
 
 ## 固定频率和功率
 
